@@ -2,7 +2,7 @@
 
 DB="localhost"
 USER="root"
-PASS="M007295F"
+PASS="12345"
 DATE=`date +"%Y-%m-%d %T"`
 
 mysql --host=localhost -u "$USER" -p"$PASS"  <<EOF
