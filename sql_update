@@ -1,0 +1,117 @@
+#!/bin/bash
+# synchronizovat lokalni databazi s tou na serveru, ale jen to nove
+DB="XXX"
+USER="XXX"
+PASS="XXX"
+OLDIFS=$IFS
+IFS=,
+
+# Ulozime posledni datum behu skriptu
+# tabulka status musi existovat a musi mit vlozeny prvni zaznam!
+datum=`date +"%Y-%m-%d %T"`
+mysql --host=localhost -u $USER -p$PASS $DB <<EOF
+    update status set last_run="${datum}";
+EOF
+
+for i in /srv/monitall/*
+do
+  if [ -d $i ] ; then
+     for x in $i/Data/
+     do
+      serial=`echo $i | sed 's/^.*\///g'`
+      filename=`ls -rt $x | grep txt | tail -1`
+      if [ -f $i/Data/$filename ] ; then
+
+#======= Vytvorime DB pokud neexsituje ================
+       filedate=`stat -c "%y" $i/Data/$filename | cut -f1 -d' '`
+       filetime=`stat -c "%y" $i/Data/$filename | cut -f2 -d' ' | cut -f1 -d'.'`
+       #echo $serial
+       #echo "filename: $filename"
+       #echo "filedate: $filedate"
+       #echo "filetime: $filetime"
+       sqlquery1=`mysql --host=localhost -u $USER -p$PASS $DB <<EOF
+            create table if not exists log_${serial} (
+                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                serial CHAR(10),
+                datum DATE,
+                cas TIME,
+                teplota1 CHAR(5),
+                teplota2 CHAR(5),
+                teplota3 CHAR(5),
+                teplota4 CHAR(5),
+                teplota5 CHAR(5),
+                teplota6 CHAR(5),
+                teplota7 CHAR(5),
+                teplota8 CHAR(5),
+                vstup1 TINYINT,
+                vstup2 TINYINT,
+                vstup3 TINYINT,
+                vstup4 TINYINT,
+                vstup5 TINYINT,
+                vstup6 TINYINT,
+                vstup7 TINYINT,
+                vstup8 TINYINT,
+                elektromer1 DECIMAL(8,4),
+                elektromer2 DECIMAL(8,4),
+                elektromer3 DECIMAL(8,4),
+                elektromer4 DECIMAL(8,4),
+                prutok1 INTEGER,
+                prutok2 INTEGER,
+                prutok3 INTEGER,
+                prutok4 INTEGER
+            );
+EOF`
+
+#======= Zjistime datum a cas posledniho zaznamu v DB ================
+	sqlquery2=`mysql -u$USER -p$PASS $DB -s -N -e "SELECT datum,cas FROM log_${serial} ORDER BY id DESC limit 1"`
+	sqllastdate=`echo $sqlquery2 | cut -c1-10`
+        sqllasttime=`echo $sqlquery2 | tail -c 9`
+        #echo "last sql date: $sqllastdate"
+        #echo "last sql time: $sqllasttime"
+
+#======= Cteni TXT souboru a ulozeni promenych ================
+    	export LINE=0
+    	while read datum cas teplota1 teplota2 teplota3 teplota4 teplota5 teplota6 teplota7 teplota8 vstup1 vstup2 vstup3 vstup4 vstup5 vstup6 vstup7 vstup8 elektromer1 elektromer2 elektromer3 elektromer4 prutok1 prutok2 prutok3 prutok4
+    	do
+	    right_datum=`awk -F[.-] '{printf $3"-"$2"-%02d\n",$1}' <<< $datum`	#konverze formatu data do yyyy-mm-dd
+	    if [ "$right_datum" != "2015-03-29" ] ; then	#bug 29.3.2015
+		seconds_sql=`date -d "$sqllastdate $sqllasttime" +%s`
+		seconds_file=`date -d "$right_datum $cas" +%s`
+		#echo "date -d $right_datum $cas +%s"
+		#echo "right datum: $right_datum"
+		#echo "cas: $cas"
+		#echo "sql seconds: $seconds_sql"
+		#echo "file seconds: $seconds_file"
+		#echo "serial: $serial"
+		if [ -n "$seconds_file" ] ; then	#string not null
+		    if [ $seconds_sql -lt $seconds_file ] ; then	#ochrana proti duplicitnim zaznamum - porovname pocet sekund a pridame pouze novejsi zaznamy
+    			((LINE++))
+			#echo "$serial"
+			#echo "$datum"
+			#echo "$right_datum"
+			#echo "$cas"
+			#Zapis promenych do DB
+           mysql --host=localhost -u $USER -p$PASS $DB <<EOF
+                   insert into log_${serial} (serial,datum,cas,teplota1,teplota2,teplota3,teplota4,teplota5,teplota6,teplota7,teplota8,vstup1,vstup2,vstup3,vstup4,vstup5,vstup6,vstup7,vstup8,elektromer1,elektromer2,elektromer3,elektromer4,prutok1,prutok2,prutok3,prutok4) values ("${serial}","${right_datum}","${cas}","${teplota1}","${teplota2}","${teplota3}","${teplota4}","${teplota5}","${teplota6}","${teplota7}","${teplota8}","${vstup1}","${vstup2}","${vstup3}","${vstup4}","${vstup5}","${vstup6}","${vstup7}","${vstup8}","${elektromer1}","${elektromer2}","${elektromer3}","${elektromer4}","${prutok1}","${prutok2}","${prutok3}","${prutok4}");
+EOF
+		    fi
+		fi
+	    fi
+    	done < $i/Data/$filename
+	#echo "Lines processed: "$LINE
+	#echo "Filename processed: "$i/Data/$filename
+
+#======= Rotace starych zaznamu ================
+#mazani starsich zaznamu > nez 12 mesicu
+           mysql --host=localhost -u $USER -p$PASS $DB <<EOF
+                    delete from log_${serial} where datum < date_sub(now(), INTERVAL 12 month);
+EOF
+
+      fi
+     done
+  fi
+done
+
+IFS=$OLDIFS
+
+
